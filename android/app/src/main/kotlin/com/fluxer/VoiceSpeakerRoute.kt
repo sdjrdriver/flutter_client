@@ -3,6 +3,7 @@ package com.fluxer
 import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
+import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
@@ -10,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.telecom.CallAudioState
 import android.telecom.Connection
+import android.util.Log
 import com.hiennv.flutter_callkit_incoming.CallkitConnection
 import com.hiennv.flutter_callkit_incoming.getDataActiveCalls
 import io.flutter.embedding.engine.FlutterEngine
@@ -236,6 +238,7 @@ class VoiceSpeakerRouteBridge(
     private var telecomOwnsRoute = false
 
     fun register(flutterEngine: FlutterEngine) {
+        VoiceDeviceChangeRelay.start(context)
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             CHANNEL_NAME,
@@ -531,4 +534,75 @@ internal fun releaseCallSpeaker(audioManager: AudioManager) {
     audioManager.mode = AudioManager.MODE_NORMAL
     @Suppress("DEPRECATION")
     audioManager.isSpeakerphoneOn = false
+}
+
+/**
+ * Fluxer's Android device-change handling (output picker refresh, falling back
+ * from a Bluetooth headset that disconnects, switching to one that connects)
+ * listens to flutter_webrtc's `onDeviceChange` event. flutter_webrtc only
+ * emits it from its AudioSwitch, which is not running while the voice session
+ * is a callkit (Telecom) call (audio session management mode
+ * externalCallSystem), so mid-call Bluetooth changes were never noticed: the
+ * picker went stale and Telecom's earpiece fallback stuck.
+ *
+ * This relay listens to AudioManager device changes itself and fires the same
+ * flutter_webrtc event. AudioSwitchManager's listener is reached by reflection
+ * because its parameter types (com.twilio.audioswitch) are not on the app's
+ * compile classpath.
+ */
+internal object VoiceDeviceChangeRelay {
+    private const val TAG = "VoiceDeviceChangeRelay"
+    private const val DEBOUNCE_MS = 300L
+    // AudioManager's communication-device list and Telecom's endpoints can
+    // lag the device callback by up to ~1 s; send a second event then.
+    private const val SETTLE_MS = 1500L
+    private val handler = Handler(Looper.getMainLooper())
+    private var started = false
+    private val notify = Runnable { notifyWebRtcDeviceChange() }
+    private val notifySettled = Runnable { notifyWebRtcDeviceChange() }
+
+    private val relevantTypes: Set<Int> =
+        (headsetCommunicationDeviceTypes + bluetoothCommunicationDeviceTypes).toSet()
+
+    private val callback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+            onChange("added", addedDevices)
+        }
+
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+            onChange("removed", removedDevices)
+        }
+    }
+
+    fun start(context: Context) {
+        if (started || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        started = true
+        val audioManager = context.applicationContext
+            .getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager.registerAudioDeviceCallback(callback, handler)
+    }
+
+    private fun onChange(what: String, devices: Array<out AudioDeviceInfo>) {
+        val relevant = devices.filter { it.type in relevantTypes }
+        if (relevant.isEmpty()) return
+        Log.d(TAG, "$what ${relevant.map { it.type }}")
+        handler.removeCallbacks(notify)
+        handler.removeCallbacks(notifySettled)
+        handler.postDelayed(notify, DEBOUNCE_MS)
+        handler.postDelayed(notifySettled, SETTLE_MS)
+    }
+
+    private fun notifyWebRtcDeviceChange() {
+        try {
+            val managerClass = Class.forName("com.cloudwebrtc.webrtc.audio.AudioSwitchManager")
+            val manager = managerClass.getField("instance").get(null) ?: return
+            @Suppress("UNCHECKED_CAST")
+            val listener = managerClass.getField("audioDeviceChangeListener").get(manager)
+                as? Function2<Any?, Any?, Any?> ?: return
+            listener.invoke(emptyList<Any>(), null)
+            Log.d(TAG, "sent onDeviceChange")
+        } catch (e: Throwable) {
+            Log.w(TAG, "could not send onDeviceChange: $e")
+        }
+    }
 }
