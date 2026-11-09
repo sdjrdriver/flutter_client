@@ -2574,6 +2574,83 @@ class VoiceSession extends _$VoiceSession {
     }
   }
 
+  /// Mute/deafen state from before the system put the voice call on hold,
+  /// tied to the voice connection it belongs to.
+  ({String? connectionId, bool selfMute, bool selfDeaf})? _stateBeforeCallHold;
+
+  /// The system (Android Telecom / iOS CallKit) put the voice call on hold or
+  /// resumed it - e.g. the user answered a cellular call. While held, the mic
+  /// is off and nobody is heard (self mute + deafen, so others see it too).
+  /// On resume the earlier state comes back, unless the user changed mute or
+  /// deafen during the hold. The saved local preferences are not touched.
+  Future<void> setCallHold({required bool onHold}) async {
+    final VoiceSessionState s = state;
+    if (!s.isInVoice || s.channelId == null) {
+      _stateBeforeCallHold = null;
+      return;
+    }
+    final VoiceState? vs = _selfConnectionVoiceState();
+    final bool mute = vs?.selfMute ?? false;
+    final bool deaf = vs?.selfDeaf ?? false;
+    final bool video = vs?.selfVideo ?? false;
+    if (onHold) {
+      if (_stateBeforeCallHold?.connectionId == s.activeConnectionId) {
+        return; // already held
+      }
+      _stateBeforeCallHold = (
+        connectionId: s.activeConnectionId,
+        selfMute: mute,
+        selfDeaf: deaf,
+      );
+      talker.info('[Voice] call held by the system: muting + deafening');
+      if (!(mute && deaf)) {
+        await _applySelfVoiceState(
+          selfMute: true,
+          selfDeaf: true,
+          selfVideo: video,
+        );
+      }
+      return;
+    }
+    final ({String? connectionId, bool selfMute, bool selfDeaf})? before =
+        _stateBeforeCallHold;
+    _stateBeforeCallHold = null;
+    // Android Telecom moves a resumed call back to its default route (the
+    // earpiece), while the output picker still shows the chosen one.
+    await _reapplyVoiceOutputAfterHold();
+    if (before == null || before.connectionId != s.activeConnectionId) {
+      return;
+    }
+    if (!(mute && deaf)) {
+      talker.info(
+        '[Voice] call resumed: mute/deafen changed during hold, kept',
+      );
+      return;
+    }
+    talker.info('[Voice] call resumed by the system: restoring mute/deafen');
+    await _applySelfVoiceState(
+      selfMute: before.selfMute,
+      selfDeaf: before.selfDeaf,
+      selfVideo: video,
+    );
+  }
+
+  Future<void> _reapplyVoiceOutputAfterHold() async {
+    if (!Platform.isAndroid) {
+      return;
+    }
+    talker.info('[Voice] call resumed: re-applying audio output');
+    try {
+      await _voiceSettingsApplicator().applySpeakerOutput(
+        settings: ref.read(voiceSettingsProvider),
+      );
+    } on Object catch (error) {
+      talker.warning(
+        '[Voice] re-applying audio output after hold failed: $error',
+      );
+    }
+  }
+
   Future<void> toggleSelfDeafen() async {
     final VoiceSessionState s = state;
     if (!s.isInVoice || s.channelId == null) {

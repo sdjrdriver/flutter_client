@@ -1242,8 +1242,9 @@ class VoiceCallKitCoordinatorLogic {
         }
       case CallEventActionCallIncoming(:final callKitParams):
         await _adoptCall(callKitParams);
+      case CallEventActionCallToggleHold(:final id, :final isOnHold):
+        _scheduleSync(() => _handleToggleHold(id, isOnHold: isOnHold));
       case CallEventActionCallCallback():
-      case CallEventActionCallToggleHold():
       case CallEventActionCallToggleDmtf():
       case CallEventActionCallToggleGroup():
       case CallEventActionCallCustom():
@@ -1693,6 +1694,33 @@ class VoiceCallKitCoordinatorLogic {
       return;
     }
     await executeIgnoreIncomingVoiceCallFromCallKit(_ref, channelId);
+  }
+
+  /// The system held or resumed the call (e.g. a cellular call was answered
+  /// and ended). Without this, voice kept sending the mic and playing the
+  /// channel during the other call.
+  Future<void> _handleToggleHold(
+    String callKitId, {
+    required bool isOnHold,
+  }) async {
+    final String? channelId = _resolveChannelId(callKitId: callKitId);
+    if (channelId == null) {
+      talker.warning('[VoiceCallKit] hold toggle ignored: unknown call id');
+      return;
+    }
+    final VoiceCallKitVoiceSnapshot voice = _voiceCallKitVoiceSnapshot(
+      _ref.read(voiceSessionProvider),
+    );
+    if (voice.channelId != channelId || !voice.isInVoice) {
+      return;
+    }
+    try {
+      await _ref
+          .read(voiceSessionProvider.notifier)
+          .setCallHold(onHold: isOnHold);
+    } on Object catch (error) {
+      talker.warning('[VoiceCallKit] setCallHold from CallKit failed: $error');
+    }
   }
 
   Future<void> _handleToggleMute(
