@@ -2120,13 +2120,17 @@ class VoiceSession extends _$VoiceSession {
     }
   }
 
-  Future<bool> leaveInterruptedGatewayVoice(String channelId) async {
-    if (channelId.isEmpty) {
+  /// Disconnects the leftover server voice state [staleConnectionId] of a session
+  /// that died in a call. Never touches the current session or other devices.
+  Future<bool> leaveInterruptedGatewayVoice(
+    String channelId, {
+    required String staleConnectionId,
+  }) async {
+    if (channelId.isEmpty || staleConnectionId.isEmpty) {
       return false;
     }
-    if (state.isInVoice && state.channelId == channelId) {
-      await leaveVoice(endCall: false);
-      return true;
+    if (state.isInVoice && state.activeConnectionId == staleConnectionId) {
+      return false;
     }
     final String? userId = ref.read(currentUserIdProvider);
     if (userId == null) {
@@ -2135,7 +2139,9 @@ class VoiceSession extends _$VoiceSession {
     VoiceState? selfOnServer;
     for (final VoiceState voiceState
         in ref.read(voiceStatesMapProvider(readAccountUserId(ref))).values) {
-      if (voiceState.userId == userId && voiceState.channelId == channelId) {
+      if (voiceState.userId == userId &&
+          voiceState.channelId == channelId &&
+          voiceState.connectionId == staleConnectionId) {
         selfOnServer = voiceState;
         break;
       }

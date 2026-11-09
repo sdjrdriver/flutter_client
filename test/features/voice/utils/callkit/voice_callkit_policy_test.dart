@@ -846,58 +846,125 @@ void main() {
   });
 
   group('shouldLeaveVoiceForInterruptedSession', () {
-    VoiceCallKitVoiceSnapshot voiceInChannel(String channelId) {
+    VoiceCallKitVoiceSnapshot voiceInChannel(String channelId, String conn) {
       return (
         isInVoice: true,
         isConnected: true,
         isConnecting: false,
         channelId: channelId,
-        activeConnectionId: 'conn',
+        activeConnectionId: conn,
       );
     }
 
-    test('leaves when local session matches interrupted channel', () {
+    const VoiceCallKitVoiceSnapshot notInVoice = (
+      isInVoice: false,
+      isConnected: false,
+      isConnecting: false,
+      channelId: null,
+      activeConnectionId: null,
+    );
+
+    test('disconnects the leftover connection when not in voice', () {
       expect(
         shouldLeaveVoiceForInterruptedSession(
           interruptedChannelId: 'c1',
-          voice: voiceInChannel('c1'),
-          selfInChannelOnServer: false,
+          interruptedConnectionId: 'old',
+          voice: notInVoice,
+          interruptedConnectionOnServer: true,
         ),
         isTrue,
       );
     });
 
-    test('leaves when server still lists self in interrupted channel', () {
+    test('disconnects the leftover connection next to a rejoined session', () {
       expect(
         shouldLeaveVoiceForInterruptedSession(
           interruptedChannelId: 'c1',
-          voice: (
-            isInVoice: false,
-            isConnected: false,
-            isConnecting: false,
-            channelId: null,
-            activeConnectionId: null,
-          ),
-          selfInChannelOnServer: true,
+          interruptedConnectionId: 'old',
+          voice: voiceInChannel('c1', 'new'),
+          interruptedConnectionOnServer: true,
         ),
         isTrue,
       );
     });
 
-    test('skips when interrupted id is missing or unrelated', () {
+    test('never targets the current session', () {
       expect(
         shouldLeaveVoiceForInterruptedSession(
-          interruptedChannelId: null,
-          voice: voiceInChannel('c1'),
-          selfInChannelOnServer: true,
+          interruptedChannelId: 'c1',
+          interruptedConnectionId: 'same',
+          voice: voiceInChannel('c1', 'same'),
+          interruptedConnectionOnServer: true,
+        ),
+        isFalse,
+      );
+    });
+
+    test('does nothing once the leftover connection is gone', () {
+      expect(
+        shouldLeaveVoiceForInterruptedSession(
+          interruptedChannelId: 'c1',
+          interruptedConnectionId: 'old',
+          voice: voiceInChannel('c1', 'new'),
+          interruptedConnectionOnServer: false,
+        ),
+        isFalse,
+      );
+    });
+
+    test('does nothing without a recorded connection id', () {
+      expect(
+        shouldLeaveVoiceForInterruptedSession(
+          interruptedChannelId: 'c1',
+          interruptedConnectionId: null,
+          voice: notInVoice,
+          interruptedConnectionOnServer: true,
         ),
         isFalse,
       );
       expect(
         shouldLeaveVoiceForInterruptedSession(
-          interruptedChannelId: 'c2',
-          voice: voiceInChannel('c1'),
-          selfInChannelOnServer: false,
+          interruptedChannelId: null,
+          interruptedConnectionId: 'old',
+          voice: notInVoice,
+          interruptedConnectionOnServer: true,
+        ),
+        isFalse,
+      );
+    });
+  });
+
+  group('selfConnectionInChannel', () {
+    const List<VoiceState> states = <VoiceState>[
+      VoiceState(userId: 'u1', channelId: 'c1', connectionId: 'pc'),
+      VoiceState(userId: 'u1', channelId: 'c1', connectionId: 'old'),
+    ];
+
+    test('finds only the exact connection', () {
+      expect(
+        selfConnectionInChannel(
+          voiceStates: states,
+          currentUserId: 'u1',
+          channelId: 'c1',
+          connectionId: 'old',
+        ),
+        isTrue,
+      );
+      expect(
+        selfConnectionInChannel(
+          voiceStates: states,
+          currentUserId: 'u1',
+          channelId: 'c1',
+          connectionId: 'gone',
+        ),
+        isFalse,
+      );
+      expect(
+        selfConnectionInChannel(
+          voiceStates: states,
+          currentUserId: 'u2',
+          channelId: 'c1',
+          connectionId: 'old',
         ),
         isFalse,
       );

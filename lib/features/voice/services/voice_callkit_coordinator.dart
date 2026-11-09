@@ -97,6 +97,7 @@ class VoiceCallKitCoordinatorLogic {
   Timer? _audioSessionRecoveryTimer;
   final List<Timer> _speakerReapplyTimers = <Timer>[];
   String? _interruptedChannelIdPendingLeave;
+  String? _interruptedConnectionIdPendingLeave;
 
   void init() {
     if (Platform.isAndroid) {
@@ -539,8 +540,17 @@ class VoiceCallKitCoordinatorLogic {
       }
       return;
     }
-    if (didJoinVoiceCall(previous: previous, next: next)) {
-      unawaited(markVoiceCallInProgress(next.channelId!));
+    // Re-record when the connection id arrives or changes, so a cleanup
+    // after an interrupted session can target exactly this connection.
+    if (next.channelId != null &&
+        (didJoinVoiceCall(previous: previous, next: next) ||
+            next.activeConnectionId != previous?.activeConnectionId)) {
+      unawaited(
+        markVoiceCallInProgress(
+          next.channelId!,
+          connectionId: next.activeConnectionId,
+        ),
+      );
     }
   }
 
@@ -642,6 +652,9 @@ class VoiceCallKitCoordinatorLogic {
         ? await takeInterruptedVoiceCallChannelId()
         : null;
     _interruptedChannelIdPendingLeave = interruptedChannelId;
+    _interruptedConnectionIdPendingLeave = interruptedChannelId != null
+        ? await takeInterruptedVoiceCallConnectionId()
+        : null;
     await _adoptNativeCalls(interruptedChannelId: interruptedChannelId);
     if (interruptedChannelId != null && _ref.read(gatewayReadyProvider)) {
       _scheduleSync(_leaveInterruptedVoiceSessionIfNeeded);
@@ -1140,37 +1153,53 @@ class VoiceCallKitCoordinatorLogic {
     if (!_ref.read(gatewayReadyProvider)) {
       return;
     }
+    final String? interruptedConnectionId =
+        _interruptedConnectionIdPendingLeave;
     final VoiceCallKitVoiceSnapshot voice = _voiceCallKitVoiceSnapshot(
       _ref.read(voiceSessionProvider),
     );
-    final bool selfInChannelOnServer = selfVoiceStateInChannel(
-      voiceStates: _ref
-          .read(voiceStatesMapProvider(readAccountUserId(_ref)))
-          .values,
-      currentUserId: _ref.read(currentUserIdProvider),
-      channelId: interruptedChannelId,
-    );
+    final bool interruptedConnectionOnServer =
+        interruptedConnectionId != null &&
+        selfConnectionInChannel(
+          voiceStates: _ref
+              .read(voiceStatesMapProvider(readAccountUserId(_ref)))
+              .values,
+          currentUserId: _ref.read(currentUserIdProvider),
+          channelId: interruptedChannelId,
+          connectionId: interruptedConnectionId,
+        );
     if (!shouldLeaveVoiceForInterruptedSession(
       interruptedChannelId: interruptedChannelId,
+      interruptedConnectionId: interruptedConnectionId,
       voice: voice,
-      selfInChannelOnServer: selfInChannelOnServer,
+      interruptedConnectionOnServer: interruptedConnectionOnServer,
     )) {
-      if (!voice.isInVoice && !selfInChannelOnServer) {
+      if (!interruptedConnectionOnServer) {
         _interruptedChannelIdPendingLeave = null;
+        _interruptedConnectionIdPendingLeave = null;
       }
       return;
     }
     talker.info(
-      '[VoiceCallKit] leaving interrupted voice session '
-      '(channelId=$interruptedChannelId)',
+      '[VoiceCallKit] disconnecting leftover connection of interrupted voice '
+      'session (channelId=$interruptedChannelId, '
+      'connectionId=$interruptedConnectionId)',
     );
     final bool left = await _ref
         .read(voiceSessionProvider.notifier)
-        .leaveInterruptedGatewayVoice(interruptedChannelId);
+        .leaveInterruptedGatewayVoice(
+          interruptedChannelId,
+          staleConnectionId: interruptedConnectionId!,
+        );
     if (!left) {
       return;
     }
     _interruptedChannelIdPendingLeave = null;
+    _interruptedConnectionIdPendingLeave = null;
+    // A session joined since the restart owns the current CallKit call.
+    if (_voiceCallKitVoiceSnapshot(_ref.read(voiceSessionProvider)).isInVoice) {
+      return;
+    }
     try {
       await _endAllCallKitSessions();
     } on Object catch (error) {

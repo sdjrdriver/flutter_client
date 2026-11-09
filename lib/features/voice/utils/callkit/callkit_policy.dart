@@ -273,18 +273,50 @@ bool shouldHandleAndroidAppTaskRemoved({
   return hasTrackedCallKitSessions;
 }
 
+/// Whether the leftover connection of a session that died in a call (app
+/// task removed) should be disconnected now.
+///
+/// Only that exact connection is ever targeted: a session in this process was
+/// joined by the user after the restart (stale native calls are discarded,
+/// never adopted), and other connections of the same account are other
+/// devices. Without a recorded connection id nothing is disconnected.
 bool shouldLeaveVoiceForInterruptedSession({
   required String? interruptedChannelId,
+  required String? interruptedConnectionId,
   required VoiceCallKitVoiceSnapshot voice,
-  required bool selfInChannelOnServer,
+  required bool interruptedConnectionOnServer,
 }) {
   if (interruptedChannelId == null || interruptedChannelId.isEmpty) {
     return false;
   }
-  if (voice.isInVoice && voice.channelId == interruptedChannelId) {
-    return true;
+  if (interruptedConnectionId == null || interruptedConnectionId.isEmpty) {
+    return false;
   }
-  return selfInChannelOnServer;
+  if (voice.activeConnectionId == interruptedConnectionId) {
+    return false;
+  }
+  return interruptedConnectionOnServer;
+}
+
+/// Whether the server still lists [connectionId] of the current user in
+/// [channelId].
+bool selfConnectionInChannel({
+  required Iterable<VoiceState> voiceStates,
+  required String? currentUserId,
+  required String channelId,
+  required String connectionId,
+}) {
+  if (currentUserId == null || currentUserId.isEmpty) {
+    return false;
+  }
+  for (final VoiceState state in voiceStates) {
+    if (state.userId == currentUserId &&
+        state.channelId == channelId &&
+        state.connectionId == connectionId) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool selfVoiceStateInChannel({
