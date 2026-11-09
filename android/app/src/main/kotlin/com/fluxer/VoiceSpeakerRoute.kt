@@ -181,11 +181,11 @@ internal fun routeFollowUpDelaysMs(
     manufacturer: String?,
     brand: String? = null,
 ): List<Long> {
-    return if (routesSpeakerWithCommunicationDevice(manufacturer, brand)) {
-        listOf(ROUTE_FOLLOW_UP_MS, 1000L, 2500L, 5000L)
-    } else {
-        listOf(ROUTE_FOLLOW_UP_MS)
-    }
+    // Telecom creates the self-managed call's Connection 0.4-1.2 s after
+    // startCall and picks the earpiece at that point on every manufacturer
+    // (seen on a Pixel 6 Pro / Android 17), so all devices need the later
+    // follow-ups that re-apply the route once the Connection exists.
+    return listOf(ROUTE_FOLLOW_UP_MS, 1000L, 2500L, 5000L)
 }
 
 internal fun telecomRouteForVoiceOutput(route: VoiceOutputRoute): Int {
@@ -326,11 +326,12 @@ class VoiceSpeakerRouteBridge(
         deviceId: Int?,
         force: Boolean = false,
     ) {
-        val connections = if (routesSpeakerWithCommunicationDevice(Build.MANUFACTURER, Build.BRAND)) {
-            telecomCallConnections(context)
-        } else {
-            emptyList()
-        }
+        // While a self-managed Telecom call exists, Telecom owns the audio
+        // route on every manufacturer, not only Samsung: AudioManager
+        // speakerphone / communication-device requests are overridden (Pixel:
+        // speaker stays on the earpiece for the whole call). Route through the
+        // call's Connection whenever one exists.
+        val connections = telecomCallConnections(context)
         if (connections.isEmpty()) {
             telecomOwnsRoute = false
             applyVoiceOutputRoute(audioManager, route, deviceId)

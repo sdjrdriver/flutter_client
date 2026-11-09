@@ -41,7 +41,7 @@ class VoiceSpeakerRouteTest {
     fun onlySamsungKeepsRecheckingTheRoute() {
         assertEquals(listOf(400L, 1000L, 2500L, 5000L), routeFollowUpDelaysMs("samsung"))
         assertEquals(listOf(400L, 1000L, 2500L, 5000L), routeFollowUpDelaysMs("Google", "samsung"))
-        assertEquals(listOf(400L), routeFollowUpDelaysMs("Google"))
+        assertEquals(listOf(400L, 1000L, 2500L, 5000L), routeFollowUpDelaysMs("Google"))
         assertEquals(listOf(400L), routeFollowUpDelaysMs(null))
     }
 
