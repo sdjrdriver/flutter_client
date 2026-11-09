@@ -3379,6 +3379,8 @@ class VoiceSession extends _$VoiceSession {
     _lastKnownOutputDeviceIds = outputIds;
 
     bool outputRoutesChanged = false;
+    bool externalOutputLost = false;
+    bool lostOutputOverrideCleared = false;
     if (Platform.isAndroid) {
       final Set<VoiceOutputRoute> routes =
           await readAvailableVoiceOutputRoutes();
@@ -3406,6 +3408,22 @@ class VoiceSession extends _$VoiceSession {
       )) {
         settingsNotifier.clearOutputRouteOverride();
       }
+      // A Bluetooth / wired headset went away. While the voice session is a
+      // callkit (Telecom) call, Telecom falls back to the earpiece by itself,
+      // so the user's route has to be applied again (see below).
+      externalOutputLost = didDisconnectExternalVoiceOutputRoute(
+        previous: previousRoutes,
+        current: routes,
+      );
+      if (externalOutputLost) {
+        final VoiceSettingsState before = ref.read(voiceSettingsProvider);
+        // Clearing a set override re-applies the route by itself
+        // (_onVoiceSettingsChanged); only re-apply below when nothing changed.
+        lostOutputOverrideCleared =
+            before.outputRouteOverride != null ||
+            before.outputDeviceOverride != null;
+        settingsNotifier.clearOutputRouteOverride();
+      }
       _lastKnownOutputRoutes = routes;
       _lastKnownOutputDeviceIdsOnPhone = voiceOutputDeviceIds(devices);
     }
@@ -3424,10 +3442,11 @@ class VoiceSession extends _$VoiceSession {
     _isRecoveringAudioRoute = true;
     try {
       if (shouldReapplyMobileVoiceOutputOnDeviceChange(
-        isIos: isIos,
-        isAndroid: isAndroid,
-        outputChanged: outputChanged || outputRoutesChanged,
-      )) {
+            isIos: isIos,
+            isAndroid: isAndroid,
+            outputChanged: outputChanged || outputRoutesChanged,
+          ) ||
+          (externalOutputLost && !lostOutputOverrideCleared)) {
         await _runAudioRouteRecoveryStep(
           'applySpeakerOutput',
           () => applicator.applySpeakerOutput(settings: settings),

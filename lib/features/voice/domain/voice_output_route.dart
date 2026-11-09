@@ -82,6 +82,20 @@ bool didConnectExternalVoiceOutputRoute({
   );
 }
 
+/// True when a Bluetooth or wired route that was available has gone away.
+bool didDisconnectExternalVoiceOutputRoute({
+  required Set<VoiceOutputRoute>? previous,
+  required Set<VoiceOutputRoute> current,
+}) {
+  if (previous == null) {
+    return false;
+  }
+  return previous.any(
+    (VoiceOutputRoute route) =>
+        !isBuiltInVoiceOutputRoute(route) && !current.contains(route),
+  );
+}
+
 bool liveKitPrefersSpeaker(VoiceOutputRoute route) {
   return route == VoiceOutputRoute.speaker;
 }

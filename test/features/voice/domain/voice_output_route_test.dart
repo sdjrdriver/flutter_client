@@ -153,6 +153,38 @@ void main() {
     });
   });
 
+  group('didDisconnectExternalVoiceOutputRoute', () {
+    test('is true when a Bluetooth or wired route goes away', () {
+      expect(
+        didDisconnectExternalVoiceOutputRoute(
+          previous: <VoiceOutputRoute>{
+            ...kPhoneVoiceOutputRoutes,
+            VoiceOutputRoute.bluetooth,
+          },
+          current: kPhoneVoiceOutputRoutes,
+        ),
+        isTrue,
+      );
+    });
+
+    test('is false when a headset connects or nothing is known yet', () {
+      expect(
+        didDisconnectExternalVoiceOutputRoute(
+          previous: kPhoneVoiceOutputRoutes,
+          current: VoiceOutputRoute.values.toSet(),
+        ),
+        isFalse,
+      );
+      expect(
+        didDisconnectExternalVoiceOutputRoute(
+          previous: null,
+          current: kPhoneVoiceOutputRoutes,
+        ),
+        isFalse,
+      );
+    });
+  });
+
   group('liveKitPrefersSpeaker', () {
     test('forces the speaker only for the speaker route', () {
       expect(liveKitPrefersSpeaker(VoiceOutputRoute.speaker), isTrue);
